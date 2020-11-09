@@ -162,6 +162,7 @@ task javaPostCommit() {
   dependsOn ":sdks:java:io:google-cloud-platform:postCommit"
   dependsOn ":sdks:java:io:kinesis:integrationTest"
   dependsOn ":sdks:java:io:hadoop-format:hadoopFormatIOElasticTest"
+  dependsOn ":sdks:java:io:kafka:kafkaVersionsTest"
 }
 
 task sqlPostCommit() {

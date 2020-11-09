@@ -33,6 +33,7 @@ import org.apache.beam.sdk.io.common.IOITHelper;
 import org.apache.beam.sdk.io.common.IOTestPipelineOptions;
 import org.apache.beam.sdk.io.synthetic.SyntheticBoundedSource;
 import org.apache.beam.sdk.io.synthetic.SyntheticSourceOptions;
+import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.StreamingOptions;
 import org.apache.beam.sdk.options.Validation;
@@ -51,12 +52,16 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableMap;
 import org.apache.beam.vendor.guava.v26_0_jre.com.google.common.collect.ImmutableSet;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.checkerframework.checker.nullness.qual.Nullable;
 import org.joda.time.Duration;
+import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
+import org.testcontainers.containers.KafkaContainer;
+import org.testcontainers.utility.DockerImageName;
 
 /**
  * IO Integration test for {@link org.apache.beam.sdk.io.kafka.KafkaIO}.
@@ -97,6 +102,8 @@ public class KafkaIOIT {
 
   @Rule public TestPipeline readPipeline = TestPipeline.create();
 
+  private static KafkaContainer kafkaContainer;
+
   @BeforeClass
   public static void setup() throws IOException {
     options = IOITHelper.readIOTestPipelineOptions(Options.class);
@@ -107,12 +114,23 @@ public class KafkaIOIT {
             1000L, "4507649971ee7c51abbb446e65a5c660",
             100_000_000L, "0f12c27c9a7672e14775594be66cad9a");
     expectedHashcode = getHashForRecordCount(sourceOptions.numRecords, expectedHashes);
+    if (options.getUseTestcontainers()) {
+      setupKafkaContainer();
+      return;
+    }
     settings =
         InfluxDBSettings.builder()
             .withHost(options.getInfluxHost())
             .withDatabase(options.getInfluxDatabase())
             .withMeasurement(options.getInfluxMeasurement())
             .get();
+  }
+
+  @AfterClass
+  public static void afterClass() {
+    if (kafkaContainer != null) {
+      kafkaContainer.stop();
+    }
   }
 
   @Test
@@ -141,9 +159,11 @@ public class KafkaIOIT {
 
     cancelIfTimeouted(readResult, readState);
 
-    Set<NamedTestResult> metrics = readMetrics(writeResult, readResult);
-    IOITMetrics.publish(options.getBigQueryDataset(), options.getBigQueryTable(), metrics);
-    IOITMetrics.publishToInflux(TEST_ID, TIMESTAMP, metrics, settings);
+    if (!options.getUseTestcontainers()) {
+      Set<NamedTestResult> metrics = readMetrics(writeResult, readResult);
+      IOITMetrics.publish(options.getBigQueryDataset(), options.getBigQueryTable(), metrics);
+      IOITMetrics.publishToInflux(TEST_ID, TIMESTAMP, metrics, settings);
+    }
   }
 
   private Set<NamedTestResult> readMetrics(PipelineResult writeResult, PipelineResult readResult) {
@@ -201,7 +221,7 @@ public class KafkaIOIT {
     void setSourceOptions(String sourceOptions);
 
     @Description("Kafka bootstrap server addresses")
-    @Validation.Required
+    @Default.String("localhost:9092")
     String getKafkaBootstrapServerAddresses();
 
     void setKafkaBootstrapServerAddresses(String address);
@@ -217,6 +237,18 @@ public class KafkaIOIT {
     Integer getReadTimeout();
 
     void setReadTimeout(Integer readTimeout);
+
+    @Description("Use testcontainers")
+    @Default.Boolean(false)
+    Boolean getUseTestcontainers();
+
+    void setUseTestcontainers(Boolean useTestcontainers);
+
+    @Description("Kafka container version in format 'X.Y.Z'. Use when useTestcontainers is true")
+    @Nullable
+    String getKafkaContainerVersion();
+
+    void setKafkaContainerVersion(String kafkaContainerVersion);
   }
 
   private static class MapKafkaRecordsToStrings
@@ -236,5 +268,14 @@ public class KafkaIOIT {
           String.format("No hash for that record count: %s", recordCount));
     }
     return hash;
+  }
+
+  private static void setupKafkaContainer() {
+    kafkaContainer =
+        new KafkaContainer(
+            DockerImageName.parse("confluentinc/cp-kafka")
+                .withTag(options.getKafkaContainerVersion()));
+    kafkaContainer.start();
+    options.setKafkaBootstrapServerAddresses(kafkaContainer.getBootstrapServers());
   }
 }
